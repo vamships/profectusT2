@@ -1,0 +1,112 @@
+# ******************************************************************************
+# Author      : Srivamshi Pittala
+# Advisor     : Prof. Chris Bailey-Kellogg
+# Project     : Profectus T2
+# Description : Performs antigen-specific titer adjustment on luminex measurements
+# Cite        : TBD
+# ******************************************************************************
+
+computeTiterAgSpecific = function(luminex,reagent_list,antigen_list,lcolors,subjects,scolors,dir_res){
+  
+  # average the titer measurements across low and high concentrations
+  low_mat = luminex[,intersect(grep('IgG',colnames(luminex)),grep('low',tolower(colnames(luminex)),ignore.case = F))]
+  high_mat = luminex[,intersect(grep('IgG',colnames(luminex)),grep('high',tolower(colnames(luminex)),ignore.case = F))]
+  titer_mat = (low_mat + high_mat) / 2
+  
+  # Remove titer columns
+  rm_feat = grep('IgG',colnames(luminex))
+  
+  if(length(rm_feat)!=0){
+    
+    luminex = luminex[,-rm_feat]
+    lcolors = lcolors[-rm_feat,]
+    
+  }
+  
+  titer_ortho_adjusted = vector("list",length(antigen_list))
+  names(titer_ortho_adjusted) = antigen_list
+  
+  titer_corrs = data.frame(matrix(NA,nrow=ncol(luminex),ncol=2))
+  colnames(titer_corrs) = c('corr','grp')
+  
+  agIdx = 0
+  startIdx = 0
+  endIdx = 0
+  
+  for(antigen in antigen_list){
+    
+    agIdx = agIdx + 1
+    
+    cat("Working on antigen : ",agIdx,".",antigen,"\n")
+    
+    dir_Ag = paste(dir_res,agIdx,'.',antigen,'/',sep="")
+    dir.create(dir_Ag)
+    
+    titer_vec = titer_mat[,grep(antigen,colnames(titer_mat))]
+    
+    order_titer = order(titer_vec)
+    
+    featMat = luminex[,grep(antigen,colnames(luminex))]
+    lcolorMat = lcolors[grep(antigen,colnames(luminex)),]
+    
+    featMat = featMat[order_titer,]
+    titer_vec = titer_vec[order_titer]
+    
+    if(ncol(featMat)!=0){
+      
+      # correlation between the titer and feature vectors
+      xcor = cor(titer_vec,featMat,use='pairwise.complete.obs')
+      pdf(paste(dir_Ag,antigen,'.pdf',sep=""))
+      corrplot(xcor,tl.cex=0.97,addCoef.col = "black")
+      dev.off()
+      
+      # make the vector zero centered and unit length
+      titer_vec = titer_vec - mean(titer_vec,na.rm=TRUE)
+      titer_vec = titer_vec/sqrt(sum(titer_vec^2,na.rm=TRUE))
+      
+      # project the feature vectors onto the titer vector
+      featMatProj = linearOrthoProj(featMat,titer_vec,antigen,subjects,scolors,lcolorMat,dir_Ag)
+      titer_ortho_adjusted[[antigen]] = featMatProj
+      
+      # correlation between features before and after titer adjustment
+      fullCorrMat = cor(featMat,featMatProj,use='pairwise.complete.obs')
+      pdf(paste(dir_Ag,'prePostCorr.pdf',sep=""))
+      corrplot(fullCorrMat,tl.cex=0.77,addCoef.col = "black")
+      dev.off()
+      
+      # scatterplot of features before and after projection
+      prePostCor = diag(fullCorrMat)
+      for(featIdx in 1:length(prePostCor)){
+        
+        if(!is.na(prePostCor[featIdx])){
+          
+          pdf(paste(dir_Ag,'feat_',featIdx,'.pdf',sep=""))
+          plot(featMat[,featIdx],featMatProj[,featIdx],pch=16,cex=1.5,col=scolors[,1],xlab='Pre',ylab='Post',main=paste(colnames(featMat)[featIdx]," (PCC: ",round(prePostCor[featIdx],2),") ",sep=""))
+          dev.off()
+          
+        }
+      }
+      
+      endIdx = startIdx + ncol(featMat)
+      startIdx = startIdx + 1
+      
+      titer_corrs[startIdx:endIdx,'corr'] = as.vector(xcor)
+      titer_corrs[startIdx:endIdx,'grp'] = agIdx
+      
+      startIdx = startIdx + ncol(featMat) - 1
+      
+    }
+    
+  }
+  
+  # plot summary of correlations with titers
+  titer_corrs$grp = as.factor(titer_corrs$grp)
+  pdf(paste(dir_res,'corr_summary.pdf',sep=""))
+  par(mar=c(14,4,2,0.5))
+  boxplot(corr~grp,data=titer_corrs,col=antigen_colors[antigen_list[as.numeric(levels(titer_corrs$grp))]],xaxt="n",ylim=c(-1,1))
+  axis(1,at=1:length(levels(titer_corrs$grp)),labels = antigen_list[as.numeric(levels(titer_corrs$grp))],las=2)
+  dev.off()
+  
+  return(titer_ortho_adjusted)
+  
+}

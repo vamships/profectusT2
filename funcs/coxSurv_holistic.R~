@@ -1,0 +1,488 @@
+coxSurv_holistic = function(feats,subj_original,scolors,group_colors,num_folds,plots,dir_surv){
+  
+  #survObject = Surv(subj_original[,'Challenges'],subj_original[,'censor'])
+  survObject = Surv((subj_original[,'Challenges']+subj_original[,'censor']-1),subj_original[,'censor'])
+  
+  na_idx = which(is.na(feats),arr.ind=TRUE)
+  feats_scaled = scale(data.matrix(feats),center=TRUE,scale=TRUE)
+  if(length(na_idx) !=0)
+    feats_scaled[na_idx] = 0
+  
+  feats_scaled = data.frame(feats_scaled)
+  #feats_scaled[18,'C1q.SIVsmH4.PR55.Gag'] = 0
+  #   group_ID = unique(subj_original[,'group'])
+  #   
+  # kaplan meier curves
+  # groupwise
+  fit_km_group = survfit(survObject ~ strata(subj_original[,'groupID']))
+  pdf(paste(dir_surv,'surv_km_group.pdf',sep=""))
+  par(xpd=TRUE)
+  plot(fit_km_group,mark.time=FALSE,col=group_colors,lwd=3,xlab='Challenges',ylab='uninfected ratio')
+  legend('topright',legend=names(group_id),fill=group_colors)
+  dev.off()
+  
+  # learn a single cox model using all subjects
+  fit_cox_all = coxph(survObject ~ .,data=feats_scaled,control=coxph.control(iter.max=100))
+  km_all = survfit(survObject ~ 1)
+  
+#   pdf(paste(dir_surv,'surv_cox_all.pdf',sep=""))
+#   plot(survfit(fit_cox_all),mark.time=FALSE,xlab='Challenges',ylab='uninfected ratio')
+#   dev.off()
+  
+  # plot predicted KM curves from the single cox model
+  pdf(paste(dir_surv,'surv_cox_group.pdf',sep=""))
+  plot(survfit(fit_cox_all,newdata=colMeans(feats_scaled[which(subj_original[,'groupID']==2),],na.rm=TRUE)),mark.time=FALSE,conf.int=FALSE,col=group_colors['2'],lwd=3,xlab='Challenges',ylab='uninfected ratio')
+  lines(survfit(fit_cox_all,newdata=colMeans(feats_scaled[which(subj_original[,'groupID']==3),],na.rm=TRUE)),mark.time=FALSE,conf.int=FALSE,col=group_colors['3'],lwd=3)
+  lines(survfit(fit_cox_all,newdata=colMeans(feats_scaled[which(subj_original[,'groupID']==4),],na.rm=TRUE)),mark.time=FALSE,conf.int=FALSE,col=group_colors['4'],lwd=3)
+  lines(survfit(fit_cox_all,newdata=colMeans(feats_scaled[which(subj_original[,'groupID']==5),],na.rm=TRUE)),mark.time=FALSE,conf.int=FALSE,col=group_colors['5'],lwd=3)
+  legend('topright',legend=names(group_id),fill=group_colors)
+  dev.off()
+  
+  km_actual_interest = survfit(survObject ~ subj_original[,'groupID']==4)
+  
+  event_size_int = cumsum(km_actual_interest$strata)
+  start_idx_int = c(1,1+event_size_int)
+  
+  time_g_int = km_actual_interest$time[start_idx_int[[1]]:event_size_int[[1]]]
+  time_g4_int = km_actual_interest$time[start_idx_int[[2]]:event_size_int[[2]]]
+  
+  time_idx_g_int = numeric(length=length(km_all$time))
+  time_idx_g_int[intersect(km_all$time,time_g_int)] = 1:length(time_g_int)
+  for(timeIdx in 1:length(km_all$time)){
+    if(time_idx_g_int[timeIdx]==0){
+      time_idx_g_int[timeIdx]=time_idx_g_int[timeIdx-1]
+    }
+  }
+  
+  time_idx_g4_int = numeric(length=length(km_all$time))
+  time_idx_g4_int[intersect(km_all$time,time_g4_int)] = 1:length(time_g4_int)
+  for(timeIdx in 1:length(km_all$time)){
+    if(time_idx_g4_int[timeIdx]==0){
+      time_idx_g4_int[timeIdx]=time_idx_g4_int[timeIdx-1]
+    }
+  }
+  
+  surv_actual_g_int = km_actual_interest$surv[start_idx_int[[1]]:event_size_int[[1]]]
+  surv_actual_g4_int = km_actual_interest$surv[start_idx_int[[2]]:event_size_int[[2]]]
+  
+  cat('Actual Int G : ',time_idx_g_int,'\n')
+  cat('Actual Int G4 : ',time_idx_g4_int,'\n')
+  
+  max_chall = max(subj_original[,'Challenges'] + subj_original[,'censor'] - 1)
+  num_samples = 8
+  
+  surv_actual_g_int = surv_actual_g_int[time_idx_g_int]
+  surv_actual_g4_int = surv_actual_g4_int[time_idx_g4_int]
+  
+  km_pred_g_int = survfit(fit_cox_all,newdata=colMeans(feats_scaled[which(subj_original[,'groupID']!=4),],na.rm=TRUE))
+  surv_pred_g_int = km_pred_g_int$surv[c(1:7,7,8:9)]
+  
+  km_pred_g4_int = survfit(fit_cox_all,newdata=colMeans(feats_scaled[which(subj_original[,'groupID']==4),],na.rm=TRUE))
+  surv_pred_g4_int = km_pred_g4_int$surv[c(1:7,7,8:9)]
+  
+  events_actual_g_int = convertKMtoEvents(surv_actual_g_int,max_chall,24)
+  events_actual_g4_int = convertKMtoEvents(surv_actual_g4_int,max_chall,8)
+  
+  events_pred_g_int = convertKMtoEvents(surv_pred_g_int,max_chall,24)
+  events_pred_g4_int = convertKMtoEvents(surv_pred_g4_int,max_chall,8)
+  
+  table_g_int = rbind(events_actual_g_int$event_table,events_pred_g_int$event_table)
+  table_g4_int = rbind(events_actual_g4_int$event_table,events_pred_g4_int$event_table)
+  
+  flag_g_int = c(((1:24)*0)+1,((1:24)*0))
+  flag_g4_int = c(((1:8)*0)+1,((1:8)*0))
+  
+  surv_g_int = survdiff(Surv(table_g_int[,'Challenges'],table_g_int[,'censor']) ~ flag_g_int)
+  surv_g4_int = survdiff(Surv(table_g4_int[,'Challenges'],table_g4_int[,'censor']) ~ flag_g4_int)
+  
+  pval_g_int = round(1 - pchisq(surv_g_int$chisq,1),2)
+  pval_g4_int = round(1 - pchisq(surv_g4_int$chisq,1),2)
+  
+  # Write output
+  label = c(rep(1,max_chall+1),rep(2,max_chall+1))
+  
+  surv_actual_all = c(c(1,surv_actual_g_int),c(1,surv_actual_g4_int))
+  surv_pred_all = c(c(1,surv_pred_g_int),c(1,surv_pred_g4_int))
+  
+  km_points = cbind(label,surv_actual_all,surv_pred_all)
+  km_points = rbind(km_points,c(0,pval_g_int,pval_g4_int))
+  colnames(km_points) = c('label','Actual','Pred')
+  
+  write.csv(km_points,file=paste(dir_surv,'km_points.csv',sep=""),row.names = F)
+  
+  pvals = km_points[23,c(2,3)]
+  km_points = km_points[-23,]
+  
+  Challenges = rep(c(0,seq(1:10)),2)
+  km_points = cbind(Challenges,km_points)
+  new = rbind(as.matrix(km_points[,c(1,2,3)]),as.matrix(km_points[,c(1,2,4)]))
+  type = c(rep(1,22),rep(2,22))
+  km_points = as.data.frame(cbind(type,new))
+  km_points$type = as.factor(km_points$type)
+  km_points$label = as.factor(km_points$label)
+  km_colors = c('blue4','firebrick')
+  names(km_colors) = c(1,2)
+  
+  pdf(paste(dir_surv,'km_compare.pdf',sep=""))
+  par(mar=c(12,4,2,0.5))
+  p = ggplot(km_points,aes(x=Challenges, y=Actual, color=label)) + geom_step(size=1.2,aes(linetype=type)) + scale_x_discrete(breaks=0:10,limits=0:10,labels=c(as.character(0:10)),expand = c(0,0.2)) + scale_y_continuous(breaks=seq(0,1,0.1)) + theme(axis.line = element_line(colour = "black",size=1), axis.title.x = element_text(size=25,colour='black'), axis.title.y = element_text(size=25,colour='black') ,axis.text.x = element_text(size=20,colour='black'), axis.text.y = element_text(size=20,colour='black'),panel.background = element_blank(), panel.grid.major.x = element_blank(), panel.grid.minor.y = element_blank(), panel.grid.major.y = element_blank(), legend.position='bottom') + scale_colour_manual(values=km_colors,labels=c(pvals[[1]],pvals[[2]])) + scale_linetype_manual(values=c('dashed','solid')) + xlab('Challenges') + ylab('Survival Probability')
+  p = p + annotate("text",x = c(8,3), y = c(0.21,0.96),label=paste('p: ',c(pvals[[1]],pvals[[2]]),sep=""),color=km_colors,size=7)
+  p = p + expand_limits(x = 0, y = 0)
+  print(p)
+  dev.off()
+  
+  # pdf(paste(dir_surv,"CvR_test.pdf",sep=""))
+  # OvP$Group = as.factor(OvP$Group)
+  # p = ggplot(OvP, aes(x=Challenges, y=Risk, color=Group)) + geom_point(aes(size=Group)) + scale_x_discrete(breaks=1:11,limits=1:11,labels=c(as.character(1:10),'UI')) + ylab(expression(log(Risk[pred]))) + theme(axis.line = element_line(colour = "black",size=1), axis.title.x = element_text(size=25,colour='black'), axis.title.y = element_text(size=25,colour='black') ,axis.text.x = element_text(size=15,colour='black'), axis.text.y = element_text(size=15,colour='black'),panel.background = element_blank(), panel.grid.major.x = element_line(colour='gray65',size=0.3,linetype = 'dashed'), panel.grid.minor.y = element_blank(), panel.grid.major.y = element_blank(),aspect.ratio=1, legend.position='bottom') + xlab('\nChallenges') + scale_colour_manual(values=group_colors,labels=c(cindex_g0,cindex_g4)) + scale_size_manual(name='Overall\nC-index',values=c(3.5,3.5,5,3.5),labels=c(cindex_ov))
+  # p = p + geom_hline(yintercept=0,colour='black',size=0.78,linetype='dashed',alpha=0.7)
+  # print(p)
+  # dev.off()
+  
+  png(paste(dir_surv,'km_compare.png',sep=""),width=800,height=800,res=135)
+  print(p)
+  dev.off()
+  
+  #-----------------------------------------------
+  
+  # plot predictor coefficients
+  coeffs = fit_cox_all$coefficients
+  coeffs = exp(coeffs[which(coeffs!=0)])
+  
+  coeffs_pos = coeffs[which(coeffs>1)]
+  coeffs_pos = coeffs_pos[order(coeffs_pos,decreasing=TRUE)]
+  pdf(paste(dir_surv,'surv_cox_pos.pdf',sep=""))
+  if(length(coeffs_pos != 0)){
+    par(mar=c(12,4,2,0.5))
+    barplot(log(coeffs_pos),main=c(" Predictor Coefficients - +ve "),las=2,names.arg=colnames(coeffs_pos),cex.names=0.6)
+  }else{
+    plot(c(0,1),c(0,1),type='n',xaxt='n',yaxt='n',xlab='',ylab=''); text(0.5,0.5,'(empty model)')
+    
+  }
+  dev.off()
+  
+  coeffs_neg = coeffs[which(coeffs<1)]
+  coeffs_neg = coeffs_neg[order(coeffs_neg,decreasing=TRUE)]
+  pdf(paste(dir_surv,'surv_cox_neg.pdf',sep=""))
+  if(length(coeffs_neg != 0)){
+    par(mar=c(12,4,2,0.5))
+    barplot(log(coeffs_neg),main=c(" Predictor Coefficients - -ve "),las=2,names.arg=colnames(coeffs_neg),cex.names=0.6)
+  }else{
+    plot(c(0,1),c(0,1),type='n',xaxt='n',yaxt='n',xlab='',ylab=''); text(0.5,0.5,'(empty model)')
+  }
+  dev.off()
+  
+  #
+  # statistical summaries
+  cox_summary = summary(fit_cox_all)
+  cox_signif = cox_summary$coefficients[,5]
+  cox_signif_sym = character(length(cox_signif))
+  for(featID in 1:length(cox_signif)){
+    
+    if(cox_signif[featID]<0.001){
+      cox_signif_sym[featID] = '***'
+    }else if(cox_signif[featID]<0.01){
+      cox_signif_sym[featID] = '**'
+    }else if(cox_signif[featID]<0.05){
+      cox_signif_sym[featID] = '*'
+    }else if(cox_signif[featID]<0.1){
+      cox_signif_sym[featID] = '-'
+    }else{
+      cox_signif_sym[featID] = '-'
+    }
+    
+  }
+  
+  # make heatmap of final feature set
+  coeff_order = order(coeffs,decreasing=TRUE)
+  feat_data = data.matrix(feats_scaled[,coeff_order])
+  feat_data[feat_data>3] = 3; feat_data[feat_data < -3] = -3
+  fr = ceiling(max(abs(min(feat_data,na.rm=TRUE)), max(feat_data,na.rm=TRUE)))
+  fbreaks = seq(-fr,fr,0.1)
+  
+  coeff_sign = matrix(nrow=ncol(feats_scaled), ncol=1, dimnames=list(colnames(feats_scaled),c('sign')))
+  coeff_sign[which(coeffs<=1)] = -0.1
+  coeff_sign[which(coeffs>1)] = 0.1
+  
+  wcolors = matrix(nrow=ncol(feat_data), ncol=1, dimnames=list(colnames(feat_data),c('weights')))
+  wcolors[which(coeffs[coeff_order]<=1),'weights'] = 'darkgoldenrod2'
+  wcolors[which(coeffs[coeff_order]>1),'weights'] = 'khaki4'
+  
+  coeffs_all = coeffs[order(coeffs,decreasing=TRUE)]
+  pdf(paste(dir_surv,'surv_cox_all.pdf',sep=""))
+  if(length(coeffs_all != 0)){
+    par(mar=c(12,7,3,1.5))
+    yrange = range(log(coeffs_all))
+    bp = barplot(log(coeffs_all),main=c(" Predictor Coefficients - All "),las=2,names.arg=colnames(coeffs_all),col='goldenrod2',cex.names=1,width=0.75,xlim=c(0,length(coeffs_all)+1),ylim=c(-1,1),ylab='',cex.axis = 2)
+    mtext(expression(paste('Coefficient (',beta,')',sep="")), side=2, line=4, cex=3)
+    text(x=bp,y=log(coeffs_all)+coeff_sign[coeff_order],labels=cox_signif_sym[coeff_order],cex=4.5,xpd=TRUE)
+    abline(h=0,lty=2,lwd=2)
+  }else{
+    plot(c(0,1),c(0,1),type='n',xaxt='n',yaxt='n',xlab='',ylab=''); text(0.5,0.5,'(empty model)')
+  }
+  dev.off()
+  
+  pdf(paste(dir_surv,'surv_cox_all_less.pdf',sep=""))
+  if(length(coeffs_all != 0)){
+    par(mar=c(12,4,2,0.5))
+    yrange = range(log(coeffs_all))
+    bp = barplot(log(coeffs_all),main=c(" Predictor Coefficients - All "),las=2,names.arg=colnames(coeffs_all),col=wcolors,cex.names=1,width=0.75,xlim=c(0,length(coeffs_all)+1),ylim=c(-1,1))
+    text(x=bp,y=coeff_sign[coeff_order],labels=round(log(coeffs_all),2),cex=1.5,xpd=TRUE)
+    text(x=bp,y=log(coeffs_all)+coeff_sign[coeff_order],labels=cox_signif_sym[coeff_order],cex=3.5,xpd=TRUE)
+    abline(h=0,lty=2,lwd=2)
+  }else{
+    plot(c(0,1),c(0,1),type='n',xaxt='n',yaxt='n',xlab='',ylab=''); text(0.5,0.5,'(empty model)')
+  }
+  dev.off()
+  
+  pdf(paste(dir_surv,'final_feat_selection_sorted.pdf',sep=""))
+  chall.sort <- sort(subj_original[,'Challenges'], index.return=TRUE)
+  heatmap.4(feat_data[chall.sort$ix,], col=bluered, scale='none', trace='none', cexRow=0.5, cexCol=1.26, margin=c(18,5), breaks=fbreaks, symkey=FALSE, dendrogram='none',RowSideColors=scolors[chall.sort$ix,],NumRowSideColors=4,Rowv=FALSE,ColSideColors=wcolors, NumColSideColors=1,Colv=FALSE,na.color='black',lmat=rbind(c(6,0,5,0),c(0,0,2,0),c(4,1,3,0)), lhei=c(1.5,0.3,7.0),lwid=c(0.2,0.06,0.2,0.3),KeyValueName = "")
+  dev.off()
+  
+  pdf(paste(dir_surv,'final_feat_selection_raw.pdf',sep=""))
+  heatmap.4(feat_data, col=bluered, scale='none', trace='none', cexRow=0.5, cexCol=0.7, margin=c(14,5), breaks=fbreaks, symkey=FALSE, dendrogram='none',RowSideColors=scolors,NumRowSideColors=4,Rowv=FALSE,ColSideColors=wcolors, NumColSideColors=1,Colv=FALSE,na.color='black',lmat=rbind(c(6,0,5,0),c(0,0,2,0),c(4,1,3,0)), lhei=c(2,0.2,6.0),lwid=c(0.2,0.06,0.2,0.3))
+  dev.off()
+  
+  pdf(paste(dir_surv,'final_feat_selection_weights.pdf',sep=""))
+  heatmap.4(feat_data[chall.sort$ix,], col=bluered, scale='none', trace='none', cexRow=0.5, cexCol=0.7, labCol=round(log(coeffs[coeff_order]),digits=2), margin=c(14,5), breaks=fbreaks, symkey=FALSE, dendrogram='none',RowSideColors=scolors[chall.sort$ix,],NumRowSideColors=4,Rowv=FALSE,ColSideColors=wcolors, NumColSideColors=1,Colv=FALSE,na.color='black',lmat=rbind(c(6,0,5,0),c(0,0,2,0),c(4,1,3,0)), lhei=c(2,0.2,6.0),lwid=c(0.2,0.06,0.2,0.3))
+  dev.off()
+  
+  pdf(paste(dir_surv,'final_feat_selection_signif.pdf',sep=""))
+  heatmap.4(feat_data[chall.sort$ix,], col=bluered, scale='none', trace='none', cexRow=0.5, cexCol=0.7, labCol=cox_signif_sym[coeff_order], margin=c(14,5), breaks=fbreaks, symkey=FALSE, dendrogram='none',RowSideColors=scolors[chall.sort$ix,],NumRowSideColors=4,Rowv=FALSE,ColSideColors=wcolors, NumColSideColors=1,Colv=FALSE,na.color='black',lmat=rbind(c(6,0,5,0),c(0,0,2,0),c(4,1,3,0)), lhei=c(2,0.2,6.0),lwid=c(0.2,0.06,0.2,0.3))
+  dev.off()
+  
+  cat('Concordance : ',cox_summary$concordance[1],'\n')
+  
+  pdf(paste(dir_surv,'final_feat_selection_signif_2.pdf',sep=""))
+  heatmap.4(feat_data[chall.sort$ix,], col=bluered, scale='none', trace='none', cexRow=0.5, cexCol=0.7, labCol=cox_signif_sym[coeff_order], margin=c(14,5), breaks=fbreaks, key=FALSE, symkey=FALSE, dendrogram='none',RowSideColors=scolors[chall.sort$ix,],NumRowSideColors=4,Rowv=FALSE,ColSideColors=wcolors, NumColSideColors=1,Colv=FALSE,na.color='black',lmat=rbind(c(6,0,5,0),c(0,0,2,0),c(4,1,3,0)), lhei=c(2,0.2,6.0),lwid=c(0.2,0.06,0.2,0.3))
+  legend('topright',legend=c(paste("Rsq = ",round(cox_summary$rsq[1],2),sep=""),paste("LL ratio = ",round(log10(cox_summary$logtest['pvalue']),2),sep=""),paste("Wald = ",round(log10(cox_summary$waldtest['pvalue']),2),sep=""),paste("Logrank = ",round(log10(cox_summary$sctest['pvalue']),2),sep="")))
+  legend('topleft',legend=c('*** - p<0.001',' ** - p<0.01','  * - p<0.05','  . - p<0.1','  ^ - p<1'),ncol=2)
+  dev.off()
+  
+  pdf(paste(dir_surv,'final_feat_selection_ph.pdf',sep=""))
+  par(mfrow=c(3,3))
+  plot(cox.zph(fit_cox_all))
+  dev.off()
+  
+  #---------------------------------------------
+  # Cross Validation
+  
+  dir_cv = paste(dir_surv,"cv/",sep="")
+  dir.create(dir_cv)
+  
+  #num_folds = ceiling(nrow(subj_original)/2)
+  val_subjects = subj_original
+  cox_pred_lp = array(0,dim=c(nrow(val_subjects),1))
+  cox_pred_lp_train = matrix(NA,nrow=nrow(val_subjects),ncol=num_folds)
+  
+  folds_list = createFolds(seq(1,nrow(val_subjects),1),num_folds,list=FALSE)
+  
+  init_seed = get(".Random.seed", mode="numeric", envir=globalenv())
+  set.seed(8357)
+  set.seed(8357)
+  folds_list = createFolds(val_subjects[,'groupID'],num_folds,list=FALSE)
+  
+  fold_coeff_spearman = matrix(0,nrow=num_folds,ncol=2)
+  colnames(fold_coeff_spearman) = c('Train','Test')
+  
+  fold_coeff_poly = matrix(0,nrow=num_folds,ncol=2)
+  colnames(fold_coeff_poly) = c('Train','Test')
+  
+  fold_coeff_cindex = matrix(0,nrow=num_folds,ncol=2)
+  colnames(fold_coeff_cindex) = c('Train','Test')
+  
+  for(foldIdx in 1:num_folds){
+    
+    dir_fold = paste(dir_cv,"fold_",foldIdx,"/",sep="")
+    dir.create(dir_fold)
+    
+    train_idx = which(folds_list != foldIdx)
+    test_idx = which(folds_list == foldIdx)
+    
+    # prepare trainng data
+    cv_survObject = Surv((val_subjects[train_idx,'Challenges']+val_subjects[train_idx,'censor']-1),val_subjects[train_idx,'censor'])
+    
+    cv_feats = feats_scaled[train_idx,]
+    cv_test_feats = feats_scaled[test_idx,]
+    
+    overall_mean = (numeric(length(test_idx))+1) %*% t(colMeans(feats_scaled))
+    overall_mean_test = (numeric(length(test_idx))+1) %*% t(colMeans(feats_scaled[train_idx,]))
+    
+    cv_test_feats = cv_test_feats + overall_mean_test - overall_mean
+    
+    # learn a cox model
+    fit_cox_cv = coxph(cv_survObject ~ .,data=cv_feats,control=coxph.control(iter.max=100))
+    
+    # predict on train data
+    cox_pred_train_cv = predict(fit_cox_cv,newdata=cv_feats,type="lp")
+    cox_pred_lp_train[train_idx,foldIdx] = cox_pred_train_cv
+    
+    # predict on test data
+    cox_pred_cv = predict(fit_cox_cv,newdata=cv_test_feats,type="lp")
+    cox_pred_lp[test_idx,1] = cox_pred_cv
+    
+    OvP_cv = as.data.frame(cbind(val_subjects[test_idx,'Challenges'],val_subjects[test_idx,'groupID'],cox_pred_cv))
+    colnames(OvP_cv) = c("Challenges","Group","Risk")
+    
+    pcc_test_cv = round(cor(OvP_cv[,c(1,3)],method="spearman")[1,2],2)
+    #cat('Blind Validation Test : ',pcc_test_cv,'\n')
+    fold_coeff_spearman[foldIdx,'Test'] = pcc_test_cv
+    
+    ppc_test_cv = round(polyserial(OvP_cv[,3],OvP_cv[,1]),2)
+    #cat('Blind Validation Test (poly): ',ppc_test_cv,'\n')
+    fold_coeff_poly[foldIdx,'Test'] = ppc_test_cv
+    
+    cindex_test = concordance.index(OvP_cv$Risk,(val_subjects[test_idx,'Challenges']+val_subjects[test_idx,'censor']-1),val_subjects[test_idx,'censor'],method="noether")
+    #cat('Fold C-index with LP is : ',cindex_test$c.index,'\n')
+    
+    fold_coeff_cindex[foldIdx,'Test'] = cindex_test$c.index
+    
+    OvP_train_cv = as.data.frame(cbind(val_subjects[train_idx,'Challenges'],val_subjects[train_idx,'groupID'],cox_pred_train_cv))
+    colnames(OvP_train_cv) = c("Challenges","Group","Risk")
+    
+    pcc_train_cv = round(cor(OvP_train_cv[,c(1,3)],method="spearman")[1,2],2)
+    #cat('Validation on Train Set : ',pcc_train_cv,'\n')
+    fold_coeff_spearman[foldIdx,'Train'] = pcc_train_cv
+    
+    ppc_train_cv = round(polyserial(OvP_train_cv[,3],OvP_train_cv[,1]),2)
+    #cat('Validation on Train Set (poly): ',ppc_train_cv,'\n')
+    fold_coeff_poly[foldIdx,'Train'] = ppc_train_cv
+    
+    cindex_train = concordance.index(OvP_train_cv$Risk,(val_subjects[train_idx,'Challenges']+val_subjects[train_idx,'censor']-1),val_subjects[train_idx,'censor'],method="noether")
+    
+    fold_coeff_cindex[foldIdx,'Train'] = cindex_train$c.index
+    
+  }
+  rm(.Random.seed,envir=globalenv())
+  
+  # Observed vs Predicted
+  OvP = as.data.frame(cbind(val_subjects[,'Challenges'],cox_pred_lp,rowSums(cox_pred_lp_train,na.rm=TRUE)/(num_folds-1),val_subjects[,'groupID'],(val_subjects[,'groupID']==4)*1))
+  colnames(OvP) = c("Challenges","Risk","Risk_Train","Group","G4")
+  
+  grp_2 = which(OvP[,'Group']==2)
+  grp_3 = which(OvP[,'Group']==3)
+  grp_4 = which(OvP[,'Group']==4)
+  grp_5 = which(OvP[,'Group']==5)
+  
+#   pcc_test = round(cor(OvP[,c(2,3)],method="spearman")[1,2],2)
+#   cat('Test : ',pcc_test,'\n')
+#   cat('Test avg : ',mean(fold_coeff_spearman[,'Test']),'\n')
+#   
+#   pcc_train = round(cor(OvP[,c(2,4)],method="spearman")[1,2],2)
+#   cat('Train : ',pcc_train,'\n')
+#   cat('Train avg : ',mean(fold_coeff_spearman[,'Train']),'\n')
+  
+  ppc_grp_2 = round(polyserial(OvP[grp_2,'Risk'],OvP[grp_2,'Challenges']),2)
+  ppc_grp_3 = round(polyserial(OvP[grp_3,'Risk'],OvP[grp_3,'Challenges']),2)
+  ppc_grp_4 = round(polyserial(OvP[grp_4,'Risk'],OvP[grp_4,'Challenges']),2)
+  ppc_grp_5 = round(polyserial(OvP[grp_5,'Risk'],OvP[grp_5,'Challenges']),2)
+  
+  cat('\n############# TEST #############\n\n#Groupwise polyserial -\t grp_2:',ppc_grp_2, '\t grp_3:',ppc_grp_3,'\t grp_4:',ppc_grp_4,'\t grp_5:',ppc_grp_5,'\n')
+  
+  ppc_test = round(polyserial(OvP[,'Risk'],OvP[,'Challenges']),2)
+  temp = polyserial(OvP[,'Risk'],OvP[,'Challenges'],std.err=TRUE)
+  p_val = round(1-pchisq(temp$chisq,temp$df),3)
+  ppc_test = round(temp$rho,2)
+  ppc_test_no_2 = round(polyserial(OvP[-grp_2,'Risk'],OvP[-grp_2,'Challenges']),2)
+  ppc_test_no_3 = round(polyserial(OvP[-grp_3,'Risk'],OvP[-grp_3,'Challenges']),2)
+  ppc_test_no_4 = round(polyserial(OvP[-grp_4,'Risk'],OvP[-grp_4,'Challenges']),2)
+  ppc_test_no_5 = round(polyserial(OvP[-grp_5,'Risk'],OvP[-grp_5,'Challenges']),2)
+  
+  cindex_test = concordance.index(OvP$Risk,(val_subjects[,'Challenges']+val_subjects[,'censor']-1),val_subjects[,'censor'],method="noether")
+  cindex_test_g4 = concordance.index(OvP[grp_4,'Risk'],(val_subjects[grp_4,'Challenges']+val_subjects[grp_4,'censor']-1),val_subjects[grp_4,'censor'],method="noether")
+  cindex_test_g0 = concordance.index(OvP[c(grp_2,grp_3,grp_5),'Risk'],(val_subjects[c(grp_2,grp_3,grp_5),'Challenges']+val_subjects[c(grp_2,grp_3,grp_5),'censor']-1),val_subjects[c(grp_2,grp_3,grp_5),'censor'],method="noether")
+  
+  cindex_ov = paste(round(cindex_test$c.index,2),' p: ',format(cindex_test$p.value,scientific=T))
+  cindex_g0 = paste(round(cindex_test_g0$c.index,2),' p: ',format(cindex_test_g0$p.value,scientific=T))
+  cindex_g4 = paste(round(cindex_test_g4$c.index,2),' p: ',format(cindex_test_g4$p.value,scientific=T))
+  
+  cat('Overall C-index with LP is : ',round(cindex_test$c.index,2),' p : ',cindex_test$p.value,'\n')
+  
+  cat('#Overall Polyserial : ',ppc_test,'\n')
+  cat('#Overall Polyserial avg : ',mean(fold_coeff_poly[,'Test']),'\n')
+  
+  ppc_tr_2 = round(polyserial(OvP[grp_2,'Risk_Train'],OvP[grp_2,'Challenges']),2)
+  ppc_tr_3 = round(polyserial(OvP[grp_3,'Risk_Train'],OvP[grp_3,'Challenges']),2)
+  ppc_tr_4 = round(polyserial(OvP[grp_4,'Risk_Train'],OvP[grp_4,'Challenges']),2)
+  ppc_tr_5 = round(polyserial(OvP[grp_5,'Risk_Train'],OvP[grp_5,'Challenges']),2)
+  
+  cat('\n############# TRAIN #############\n\n#Groupwise polyserial -\t grp_2:',ppc_tr_2,'\t grp_3:',ppc_tr_3,'\t grp_4:',ppc_tr_4,'\t grp_5:',ppc_tr_5,'\n')
+  
+  ppc_train = round(polyserial(OvP[,'Risk_Train'],OvP[,'Challenges']),2)
+  ppc_train_no_2 = round(polyserial(OvP[-grp_2,'Risk_Train'],OvP[-grp_2,'Challenges']),2)
+  ppc_train_no_3 = round(polyserial(OvP[-grp_3,'Risk_Train'],OvP[-grp_3,'Challenges']),2)
+  ppc_train_no_4 = round(polyserial(OvP[-grp_4,'Risk_Train'],OvP[-grp_4,'Challenges']),2)
+  ppc_train_no_5 = round(polyserial(OvP[-grp_5,'Risk_Train'],OvP[-grp_5,'Challenges']),2)
+  
+  cindex_train = concordance.index(OvP$Risk_Train,(val_subjects[,'Challenges']+val_subjects[,'censor']-1),val_subjects[,'censor'],method="noether")
+  cat('Overall C-index with LP is : ',round(cindex_train$c.index,2),' p : ',cindex_train$p.value,'\n')
+  
+  cat('Poly Train : ',ppc_train,'\n')
+  cat('Poly Train avg : ',mean(fold_coeff_poly[,'Train']),'\n')
+  
+  model = lm(Risk_Train~Risk,OvP)
+  pcc_val = round(sqrt(summary(model)$r.squared),2)
+  cat("pcc = ",pcc_val,"\n")
+  
+  write.csv(OvP,file=paste(dir_surv,'ovp.csv',sep=""),row.names = T,col.names = T)
+  
+  if(plots){
+    
+    pdf(paste(dir_surv,"CvR_test.pdf",sep=""))
+    OvP$Group = as.factor(OvP$Group)
+    p = ggplot(OvP, aes(x=Challenges, y=Risk, color=Group)) + geom_point(aes(size=Group)) + scale_x_discrete(breaks=1:11,limits=1:11,labels=c(as.character(1:10),'UI')) + ylab(expression(log(Risk[pred]))) + theme(axis.line = element_line(colour = "black",size=1), axis.title.x = element_text(size=25,colour='black'), axis.title.y = element_text(size=25,colour='black') ,axis.text.x = element_text(size=20,colour='black'), axis.text.y = element_text(size=20,colour='black'),panel.background = element_blank(), panel.grid.major.x = element_line(colour='gray65',size=0.3,linetype = 'dashed'), panel.grid.minor.y = element_blank(), panel.grid.major.y = element_blank(),aspect.ratio=1, legend.position='bottom') + xlab('Challenges') + scale_colour_manual(values=group_blue_colors,labels=c(cindex_g0,cindex_g4)) + scale_size_manual(name='Overall\nC-index',values=c(3.5,3.5,5,3.5),labels=c(cindex_ov))
+    p = p + geom_hline(yintercept=0,colour='black',size=0.78,linetype='dashed',alpha=0.7)
+    print(p)
+    dev.off()
+    
+    png(paste(dir_surv,"CvR_test.png",sep=""),width=800,height=800,res=135)
+    print(p)
+    dev.off()
+    
+    pdf(paste(dir_surv,"CvR_test_2.pdf",sep=""))
+    #OvP$Group = as.factor(OvP$Group)
+    OvP$G4 = as.factor(OvP$G4)
+    p = ggplot(OvP, aes(x=Challenges, y=Risk, color=G4)) + geom_point(aes(size=G4)) + scale_x_discrete(breaks=1:11,limits=1:11,labels=c(as.character(1:10),'UI')) + ylab(expression(log(Risk[pred]))) + theme(axis.line = element_line(colour = "black",size=1), axis.title.x = element_text(size=25,colour='black'), axis.title.y = element_text(size=25,colour='black') ,axis.text.x = element_text(size=15,colour='black'), axis.text.y = element_text(size=15,colour='black'),panel.background = element_blank(), panel.grid.major.x = element_line(colour='gray65',size=0.3,linetype = 'dashed'), panel.grid.minor.y = element_blank(), panel.grid.major.y = element_blank(),aspect.ratio=1, legend.position='bottom') + xlab('\nChallenges') + scale_colour_manual(values=c('blue4','red'),labels=c(cindex_g0,cindex_g4)) + scale_size_manual(name='Overall\nC-index',values=c(3.5,3.5,5,3.5),labels=c(cindex_ov))
+    p = p + geom_hline(yintercept=0,colour='black',size=0.78,linetype='dashed',alpha=0.7)
+    print(p)
+    dev.off()
+    
+    pdf(paste(dir_surv,"CvR_compare_test.pdf",sep=""))
+    p = ggplot(OvP, aes(x=Group, y=Risk, color=Group)) + geom_boxplot(width=0.6,notch = F,outlier.shape = NA, na.rm=T, size=1,colour="black") + geom_point(position = position_jitter(w=0.1),size=4,aes(colour=Group)) + scale_x_discrete(labels=c('Empty','LTA1','IL12','LTA1+IL12')) + ylab(expression(log(Risk[pred]))) + theme(axis.line = element_line(colour = "black",size=1), axis.title.x = element_text(size=25,colour='black'), axis.title.y = element_text(size=25,colour='black') ,axis.text.x = element_text(size=20,colour='black'), axis.text.y = element_text(size=15,colour='black'),panel.background = element_blank(), panel.grid.major.x = element_blank(), panel.grid.minor.y = element_blank(), panel.grid.major.y = element_blank(),aspect.ratio=1, legend.position='bottom') + xlab('') + scale_colour_manual(values=group_colors)
+    p = p + geom_hline(yintercept=0,colour='black',size=0.78,linetype='dashed',alpha=0.7)
+    print(p)
+    dev.off()
+    
+    pdf(paste(dir_surv,"CvR_compare_test_2.pdf",sep=""))
+    #OvP$G4 = as.factor(OvP$G4)
+    
+    yrange = range(OvP$Risk,na.rm=T)
+    
+    diff_test = wilcox.test(OvP[grp_4,'Risk'],OvP[c(grp_2,grp_3,grp_5),'Risk'],alternative="two.sided")
+    
+    p = ggplot(OvP, aes(x=G4, y=Risk, color=Group)) + geom_boxplot(width=0.3,notch = F,outlier.shape = NA, na.rm=T, size=1,colour="black") + geom_point(position = position_jitter(w=0.1),size=4,aes(colour=Group)) + scale_x_discrete(labels=c('Others','IL12')) + scale_y_continuous(limits=c(yrange[1],yrange[2]*1.2)) + ylab(expression(log(Risk[pred]))) + theme(axis.line = element_line(colour = "black",size=1), axis.title.x = element_text(size=25,colour='black'), axis.title.y = element_text(size=25,colour='black') ,axis.text.x = element_text(size=30,colour='black'), axis.text.y = element_text(size=20,colour='black'),panel.background = element_blank(), panel.grid.major.x = element_blank(), panel.grid.minor.y = element_blank(), panel.grid.major.y = element_blank(),aspect.ratio=1, legend.position='bottom') + xlab('') + scale_colour_manual(values=group_blue_colors)
+    p = p + geom_hline(yintercept=0,colour='black',size=0.78,linetype='dashed',alpha=0.7)
+    p = p + annotate("segment",x=1,xend=2,y=yrange[2]*1.1,yend=yrange[2]*1.1,size=2,colour='black')
+    p = p + annotate("text",x=1.5,y=yrange[2]*1.18,size=6,label=paste('P : ',format(diff_test$p.value,digits=3,scientific=T)),sep="")
+    print(p)
+    dev.off()
+    
+    png(paste(dir_surv,"CvR_compare_test_2.png",sep=""),width=800,height=800,res=135)
+    print(p)
+    dev.off()
+    
+    pdf(paste(dir_surv,"CvR_train.pdf",sep=""))
+    p = ggplot(OvP, aes(x=Challenges, y=Risk_Train, color=Group)) + geom_point(size=3) + ggtitle(paste("Challenges vs Predicted Risk (polyserial : ",ppc_train,")",sep="")) + scale_colour_manual(values=group_colors)
+    print(p)
+    dev.off()
+    
+    pdf(paste(dir_surv,"RvR.pdf",sep=""))
+    p = ggplot(OvP, aes(x=Risk_Train, y=Risk)) + geom_point() + ggtitle(paste("Predicted Risk - Train vs Test (Regr coeff : ",pcc_val,")",sep="")) + coord_fixed(ratio=1) + geom_smooth(method="lm",fullrange=TRUE,se=FALSE)
+    print(p)
+    dev.off()
+    
+  }
+  
+  return(list('ppc_train'=ppc_train,'cindex_train'=round(cindex_train$c.index,2),'ppc_test'=ppc_test,'cindex_test'=round(cindex_test$c.index,2),'ppc_grp_2'=ppc_grp_2,'ppc_grp_3'=ppc_grp_3,'ppc_grp_4'=ppc_grp_4,'ppc_grp_5'=ppc_grp_5,'pcc_val'=pcc_val,'pred_lp'=cox_pred_lp,'coeffs'=coeffs_all))
+  
+}
